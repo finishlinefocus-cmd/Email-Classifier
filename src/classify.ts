@@ -13,6 +13,18 @@ const CLASSIFICATION_SYSTEM_PROMPT = `You classify inbound emails for Automatics
 Pick EXACTLY ONE category from this list:
 ${TICKET_CATEGORIES.map(c => `- ${c}`).join('\n')}
 
+Category guide:
+- Tracking Numbers: FedEx/USPS/carrier tracking updates, shipment in transit
+- UPS Delivery Notifications: UPS "package arriving today", UPS delivery alerts (not generic tracking)
+- Customer Pictures / Tech Support: photos attached, broken/damaged product, warranty, install help
+- Walmart Purchase Order Notifications: emails from or about Walmart POs
+- Customer POs: customer purchase orders (PO #) from contractors/distributors
+- Invoices: bills, amount due, payment requests
+- Order Confirmations: order placed, order # confirmation from storefront
+- Vendor Statements: supplier/vendor account statements, reconciliation
+- Quotes: quote requests, estimates, pricing proposals
+- Orders: generic order inquiries, want to place an order, product availability
+
 Reply with ONLY the exact category name. No quotes, no punctuation, no explanation.`;
 
 interface OllamaChatResponse {
@@ -177,12 +189,13 @@ async function classifyWithOllama(
 export function classifyWithKeywords(subject: string, body: string): TicketCategory {
   const combined = `${subject} ${body}`.toLowerCase();
 
-  if (/tracking|shipment|delivered|in transit|ups tracking|fedex|usps|carrier/i.test(combined)) {
-    return 'Tracking Numbers';
-  }
-
+  // UPS-specific alerts before generic carrier tracking
   if (/ups|^ups delivery|package arriving|delivery notification/i.test(combined)) {
     return 'UPS Delivery Notifications';
+  }
+
+  if (/tracking|shipment|delivered|in transit|ups tracking|fedex|usps|carrier/i.test(combined)) {
+    return 'Tracking Numbers';
   }
 
   if (/invoice|bill|amount due|payment due|account statement/i.test(combined)) {
