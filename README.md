@@ -30,14 +30,28 @@ npm run dev
 
 Tracking Numbers · Orders · UPS Delivery Notifications · Customer Pictures / Tech Support · Walmart Purchase Order Notifications · Invoices · Order Confirmations · Vendor Statements · Customer POs · Quotes
 
-## Ollama setup (Windows server)
+## Ollama setup
+
+**1. Create the custom model** (uses **`llama3.2:3b`** — ~2GB RAM, CPU-friendly for Windows):
 
 ```bash
-ollama pull email-classifier   # or fine-tuned model when ready
-ollama serve                   # port 11434
+ollama serve                   # if not already running
+npm run ollama:create          # pulls llama3.2:3b + builds email-classifier
+npm run ollama:test            # smoke-test 3 samples
 ```
 
-Without Ollama, keyword rules handle everything automatically.
+Even lighter on power: `OLLAMA_BASE_MODEL=llama3.2:1b npm run ollama:create` (~1.3GB).
+
+**2. Configure** (optional — defaults work for local dev):
+
+```bash
+cp .env.example .env
+# OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_ENABLED, OLLAMA_TIMEOUT_MS
+```
+
+The tester UI shows a status pill: green = Ollama ready, yellow = model missing, red = offline.
+
+Without Ollama, keyword rules handle everything automatically (`⚙️`).
 
 ## Deployment
 
@@ -96,10 +110,11 @@ Classification also runs inside **[Nexus-Support](https://github.com/finishlinef
 
 1. Pull latest Nexus: `git pull` in `Nexus-Support-Trimmed`
 2. Install deps and restart: `npm install && npm run dev` (or your production start command)
-3. On the same host, start Ollama and pull the model:
+3. On the same host, start Ollama and create the classifier model:
    ```bash
-   ollama pull email-classifier
    ollama serve
+   cd Nexus-Support-Trimmed   # or Email-Classifier repo
+   npm run ollama:create      # llama3.2:3b base — ~2GB, CPU-friendly
    ```
 4. Backfill uncategorized tickets (once after upgrade):
    ```bash

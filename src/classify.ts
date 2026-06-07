@@ -1,38 +1,152 @@
 import { TICKET_CATEGORIES, TicketCategory } from './types';
 
-const OLLAMA_PORT = 11434;
-const OLLAMA_MODEL = 'email-classifier';
-const OLLAMA_CONFIDENCE_THRESHOLD = 0.85;
-const OLLAMA_TIMEOUT_MS = 5000;
+export const OLLAMA_CONFIG = {
+  host: process.env.OLLAMA_HOST || 'http://localhost:11434',
+  model: process.env.OLLAMA_MODEL || 'email-classifier',
+  enabled: process.env.OLLAMA_ENABLED !== 'false',
+  confidenceThreshold: Number(process.env.OLLAMA_CONFIDENCE_THRESHOLD) || 0.85,
+  timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS) || 30000,
+};
 
-interface OllamaResponse {
-  response: string;
+const CLASSIFICATION_SYSTEM_PROMPT = `You classify inbound emails for Automatics and More support (automatic door hardware).
+
+Pick EXACTLY ONE category from this list:
+${TICKET_CATEGORIES.map(c => `- ${c}`).join('\n')}
+
+Reply with ONLY the exact category name. No quotes, no punctuation, no explanation.`;
+
+interface OllamaChatResponse {
+  message?: { content?: string };
   done: boolean;
+}
+
+interface OllamaTagsResponse {
+  models?: { name: string }[];
+}
+
+export interface OllamaHealth {
+  enabled: boolean;
+  reachable: boolean;
+  modelInstalled: boolean;
+  host: string;
+  model: string;
+  installedModels: string[];
+  error?: string;
+}
+
+/** Map messy model output to a valid category name. */
+export function normalizeOllamaCategory(raw: string): TicketCategory | null {
+  const cleaned = raw
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\.$/, '')
+    .trim();
+
+  if ((TICKET_CATEGORIES as readonly string[]).includes(cleaned)) {
+    return cleaned as TicketCategory;
+  }
+
+  const lower = cleaned.toLowerCase();
+  for (const category of TICKET_CATEGORIES) {
+    if (lower === category.toLowerCase()) {
+      return category;
+    }
+  }
+
+  for (const category of TICKET_CATEGORIES) {
+    if (lower.includes(category.toLowerCase())) {
+      return category;
+    }
+  }
+
+  return null;
+}
+
+export async function checkOllamaHealth(): Promise<OllamaHealth> {
+  const base: OllamaHealth = {
+    enabled: OLLAMA_CONFIG.enabled,
+    reachable: false,
+    modelInstalled: false,
+    host: OLLAMA_CONFIG.host,
+    model: OLLAMA_CONFIG.model,
+    installedModels: [],
+  };
+
+  if (!OLLAMA_CONFIG.enabled) {
+    return base;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const response = await fetch(`${OLLAMA_CONFIG.host}/api/tags`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return { ...base, error: `Ollama returned ${response.status}` };
+    }
+
+    const data: OllamaTagsResponse = await response.json();
+    const installedModels = (data.models ?? []).map(m => m.name);
+    const modelInstalled = installedModels.some(
+      name => name === OLLAMA_CONFIG.model || name.startsWith(`${OLLAMA_CONFIG.model}:`)
+    );
+
+    return {
+      ...base,
+      reachable: true,
+      modelInstalled,
+      installedModels,
+      error: modelInstalled ? undefined : `Model "${OLLAMA_CONFIG.model}" not installed`,
+    };
+  } catch (err) {
+    return {
+      ...base,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 async function classifyWithOllama(
   subject: string,
-  body: string
-): Promise<{ category: TicketCategory; confidence: number } | null> {
+  body: string,
+  from = ''
+): Promise<{ category: TicketCategory; confidence: number; raw?: string } | null> {
+  if (!OLLAMA_CONFIG.enabled) {
+    return null;
+  }
+
   try {
-    const prompt = `Classify this email into ONE of these 10 categories:
-Tracking Numbers, Orders, UPS Delivery Notifications, Customer Pictures / Tech Support, Walmart Purchase Order Notifications, Invoices, Order Confirmations, Vendor Statements, Customer POs, or Quotes.
-
-Subject: ${subject}
-Body: ${body.slice(0, 500)}
-
-Respond with ONLY the category name, nothing else.`;
+    const userContent = [
+      from ? `From: ${from}` : '',
+      `Subject: ${subject}`,
+      `Body: ${body.slice(0, 500)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_CONFIG.timeoutMs);
 
-    const response = await fetch(`http://localhost:${OLLAMA_PORT}/api/generate`, {
+    const response = await fetch(`${OLLAMA_CONFIG.host}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
+        model: OLLAMA_CONFIG.model,
         stream: false,
+        keep_alive: '10m',
+        options: {
+          temperature: 0,
+          num_predict: 48,
+        },
+        messages: [
+          { role: 'system', content: CLASSIFICATION_SYSTEM_PROMPT },
+          { role: 'user', content: userContent },
+        ],
       }),
       signal: controller.signal,
     });
@@ -44,14 +158,15 @@ Respond with ONLY the category name, nothing else.`;
       return null;
     }
 
-    const data: OllamaResponse = await response.json();
-    const category = data.response.trim();
+    const data: OllamaChatResponse = await response.json();
+    const raw = (data.message?.content ?? '').trim();
+    const category = normalizeOllamaCategory(raw);
 
-    if ((TICKET_CATEGORIES as readonly string[]).includes(category)) {
-      return { category: category as TicketCategory, confidence: 0.9 };
+    if (category) {
+      return { category, confidence: 0.9, raw };
     }
 
-    console.warn('Ollama returned invalid category:', category);
+    console.warn('Ollama returned invalid category:', raw);
     return null;
   } catch (err) {
     console.warn('Ollama classification failed:', err instanceof Error ? err.message : String(err));
@@ -107,15 +222,17 @@ export function classifyWithKeywords(subject: string, body: string): TicketCateg
 
 export async function classifyInboundEmail(
   subject: string,
-  body: string
-): Promise<{ category: TicketCategory; source: 'ollama' | 'rules'; confidence: number }> {
-  const ollamaResult = await classifyWithOllama(subject, body);
+  body: string,
+  from = ''
+): Promise<{ category: TicketCategory; source: 'ollama' | 'rules'; confidence: number; ollamaRaw?: string }> {
+  const ollamaResult = await classifyWithOllama(subject, body, from);
 
-  if (ollamaResult && ollamaResult.confidence >= OLLAMA_CONFIDENCE_THRESHOLD) {
+  if (ollamaResult && ollamaResult.confidence >= OLLAMA_CONFIG.confidenceThreshold) {
     return {
       category: ollamaResult.category,
       source: 'ollama',
       confidence: ollamaResult.confidence,
+      ollamaRaw: ollamaResult.raw,
     };
   }
 
@@ -127,19 +244,4 @@ export async function classifyInboundEmail(
   };
 }
 
-const CATEGORY_COLORS: Record<TicketCategory, string> = {
-  'Tracking Numbers': '#0891b2',
-  'Orders': '#16a34a',
-  'UPS Delivery Notifications': '#7c3aed',
-  'Customer Pictures / Tech Support': '#2563eb',
-  'Walmart Purchase Order Notifications': '#db2777',
-  'Invoices': '#ca8a04',
-  'Order Confirmations': '#059669',
-  'Vendor Statements': '#71717a',
-  'Customer POs': '#ea580c',
-  'Quotes': '#d97706',
-};
-
-export function categoryColor(category: TicketCategory): string {
-  return CATEGORY_COLORS[category];
-}
+export { categoryColor } from './categories';

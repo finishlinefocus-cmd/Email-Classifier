@@ -1,6 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import { classifyInboundEmail } from './src/classify';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { checkOllamaHealth, classifyInboundEmail, OLLAMA_CONFIG } from './src/classify';
 import { TICKET_CATEGORIES, Ticket, TicketCategory } from './src/types';
 
 const PORT = Number(process.env.PORT) || 4002;
@@ -26,8 +31,18 @@ async function startServer() {
   const app = express();
   app.use(express.json());
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, port: PORT, ticketCount: tickets.length });
+  app.get('/api/health', async (_req, res) => {
+    const ollama = await checkOllamaHealth();
+    res.json({
+      ok: true,
+      port: PORT,
+      ticketCount: tickets.length,
+      ollama,
+    });
+  });
+
+  app.get('/api/ollama/health', async (_req, res) => {
+    res.json(await checkOllamaHealth());
   });
 
   app.get('/api/categories', (_req, res) => {
@@ -49,7 +64,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Provide at least one of: from, subject, body' });
     }
 
-    const classification = await classifyInboundEmail(subject, body);
+    const classification = await classifyInboundEmail(subject, body, from);
 
     const newTicket: Ticket = {
       id: generateId(),
@@ -72,12 +87,7 @@ async function startServer() {
   app.get('/api/rules', (_req, res) => {
     res.json({
       categories: TICKET_CATEGORIES,
-      ollama: {
-        port: 11434,
-        model: 'email-classifier',
-        confidenceThreshold: 0.85,
-        timeoutMs: 5000,
-      },
+      ollama: OLLAMA_CONFIG,
       fallback: 'keyword rules (confidence 0.65)',
     });
   });
@@ -90,9 +100,24 @@ async function startServer() {
   } else {
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'custom',
+      appType: 'spa',
     });
     app.use(vite.middlewares);
+
+    app.use('*', async (req, res, next) => {
+      if (req.originalUrl.startsWith('/api')) {
+        return next();
+      }
+
+      try {
+        const template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        const html = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } catch (err) {
+        vite.ssrFixStacktrace(err as Error);
+        next(err);
+      }
+    });
   }
 
   app.listen(PORT, () => {

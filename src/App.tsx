@@ -1,13 +1,29 @@
 import { useEffect, useState } from 'react';
-import { categoryColor } from './classify';
+import { categoryColor } from './categories';
 import { ClassificationResult, TICKET_CATEGORIES, Ticket } from './types';
+
+interface OllamaHealth {
+  enabled: boolean;
+  reachable: boolean;
+  modelInstalled: boolean;
+  host: string;
+  model: string;
+  installedModels: string[];
+  error?: string;
+}
 
 const PRESETS: { label: string; from: string; subject: string; body: string }[] = [
   {
     label: 'Tracking Numbers',
-    from: 'ups@notifications.com',
+    from: 'fedex@tracking.com',
     subject: 'Your shipment is in transit',
     body: 'Track your package with this tracking number: 1Z999AA10123456784',
+  },
+  {
+    label: 'Orders',
+    from: 'customer@contractor.com',
+    subject: 'Need to place an order',
+    body: 'We want to order 3 LCN 4040XP closers. Can you confirm availability?',
   },
   {
     label: 'UPS Delivery',
@@ -22,22 +38,40 @@ const PRESETS: { label: string; from: string; subject: string; body: string }[] 
     body: 'Please see the attached picture. The arm is damaged and not working.',
   },
   {
-    label: 'Quote',
-    from: 'contractor@example.com',
-    subject: 'Quote request for 10 closers',
-    body: 'Can you send a quote / estimate for LCN 4040XP units?',
-  },
-  {
     label: 'Walmart PO',
     from: 'walmart@vendors.com',
     subject: 'Walmart PO #88421',
     body: 'Please confirm receipt of this Walmart purchase order.',
   },
   {
+    label: 'Invoices',
+    from: 'billing@automaticsandmore.com',
+    subject: 'Invoice #4421 — amount due',
+    body: 'Please remit payment for the attached invoice by end of month.',
+  },
+  {
+    label: 'Order Confirmations',
+    from: 'noreply@volusion.com',
+    subject: 'Order confirmation #9921',
+    body: 'Your order has been placed. Order #9921 — thank you for your purchase.',
+  },
+  {
     label: 'Vendor Statement',
     from: 'billing@allegion.com',
     subject: 'Vendor account statement',
     body: 'Attached is your supplier reconciliation for Q2.',
+  },
+  {
+    label: 'Customer POs',
+    from: 'purchasing@gc.com',
+    subject: 'Customer PO #1234 attached',
+    body: 'Please see the attached purchase order PO #1234 for door hardware.',
+  },
+  {
+    label: 'Quotes',
+    from: 'contractor@example.com',
+    subject: 'Quote request for 10 closers',
+    body: 'Can you send a quote / estimate for LCN 4040XP units?',
   },
 ];
 
@@ -51,6 +85,7 @@ export default function App() {
   const [categoryStats, setCategoryStats] = useState<Record<string, number>>({});
   const [classifying, setClassifying] = useState(false);
   const [error, setError] = useState('');
+  const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
 
   const loadTickets = async () => {
     const [ticketData, stats] = await Promise.all([
@@ -61,8 +96,18 @@ export default function App() {
     setCategoryStats(stats);
   };
 
+  const loadOllamaHealth = async () => {
+    try {
+      const res = await fetch('/api/ollama/health');
+      setOllamaHealth(await res.json());
+    } catch {
+      setOllamaHealth(null);
+    }
+  };
+
   useEffect(() => {
     loadTickets();
+    loadOllamaHealth();
   }, []);
 
   const runClassify = async (payload?: { from: string; subject: string; body: string }) => {
@@ -116,6 +161,38 @@ export default function App() {
         <p style={{ margin: 0, color: '#555', fontSize: 14 }}>
           Ollama primary · keyword rules fallback · 10 categories
         </p>
+        {ollamaHealth && (
+          <div
+            style={{
+              marginTop: 10,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
+              background:
+                ollamaHealth.reachable && ollamaHealth.modelInstalled
+                  ? '#dcfce7'
+                  : ollamaHealth.reachable
+                    ? '#fef9c3'
+                    : '#fee2e2',
+              color:
+                ollamaHealth.reachable && ollamaHealth.modelInstalled
+                  ? '#166534'
+                  : ollamaHealth.reachable
+                    ? '#854d0e'
+                    : '#991b1b',
+            }}
+          >
+            {ollamaHealth.reachable && ollamaHealth.modelInstalled
+              ? `🤖 Ollama ready — ${ollamaHealth.model}`
+              : ollamaHealth.reachable
+                ? `⚠️ Ollama up, model missing — run: npm run ollama:create`
+                : `⚠️ Ollama offline — using keyword rules only`}
+          </div>
+        )}
       </header>
 
       <div style={{ display: 'grid', gap: 20, gridTemplateColumns: '1fr 1fr' }}>

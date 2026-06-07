@@ -1,4 +1,21 @@
-import { classifyWithKeywords } from './classify';
+import { classifyWithKeywords, normalizeOllamaCategory } from './classify';
+
+const normalizeCases: [string, string | null][] = [
+  ['Tracking Numbers', 'Tracking Numbers'],
+  ['"Invoices"', 'Invoices'],
+  ['The category is Quotes', 'Quotes'],
+  ['UPS Delivery Notifications.', 'UPS Delivery Notifications'],
+  ['Unknown Category', null],
+];
+
+let normalizePassed = 0;
+for (const [input, expected] of normalizeCases) {
+  const result = normalizeOllamaCategory(input);
+  const ok = result === expected;
+  console.log(`${ok ? '✓' : '✗'} normalize "${input}" → ${result} (expected ${expected})`);
+  if (ok) normalizePassed++;
+}
+console.log(`\nNormalize: ${normalizePassed}/${normalizeCases.length} passed\n`);
 
 const cases: { name: string; subject: string; body: string; expected: string }[] = [
   {
@@ -70,5 +87,6 @@ for (const c of cases) {
   console.log(`${ok ? '✓' : '✗'} ${c.name} → ${result} (expected ${c.expected})`);
   if (ok) passed++;
 }
-console.log(`\n${passed}/${cases.length} passed`);
-process.exit(passed === cases.length ? 0 : 1);
+console.log(`\nKeywords: ${passed}/${cases.length} passed`);
+const allPassed = passed === cases.length && normalizePassed === normalizeCases.length;
+process.exit(allPassed ? 0 : 1);
